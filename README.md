@@ -11,12 +11,12 @@ Offline Reinforcement Learning in Practice, with Conservative Q-Learning as a ca
 
 #STRUCTURE
 
-| Folder 		                  | Contents
-|---|---|---|
-| `initial_reading_material/` | Slides used for the video + recordings + Part 1 notes
-| `final_reading_material/`   | Final reading material
-| `reviews/` 		              | Per member written review, added post submisson
-| `code/`                     | Project code
+| Folder                      | Contents                                              |
+|-----------------------------|-------------------------------------------------------|
+| `initial_reading_material/` | Slides used for the video + recordings + Part 1 notes |
+| `final_reading_material/`   | Final reading material                                |
+| `reviews/`                  | Per member written review, added post submisson       |
+| `code/`                     | Project code                                          |
 
 
 
