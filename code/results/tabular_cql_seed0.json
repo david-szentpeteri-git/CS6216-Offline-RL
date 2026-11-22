@@ -1,28 +1,71 @@
 {
-  "naive": {
-    "policy": [
-      1,
-      1,
-      1,
-      0,
-      0,
-      1
-    ],
-    "Q_learned_s0": 8.099999999999957,
-    "Q_true_s0": 0.0,
-    "overestimation_s0": 8.099999999999957
-  },
-  "cql": {
-    "policy": [
-      1,
-      1,
-      0,
-      1,
-      1,
-      1
-    ],
-    "Q_learned_s0": 0.873690582564067,
-    "Q_true_s0": 0.0,
-    "overestimation_s0": 0.873690582564067
-  }
+  "seed": 0,
+  "datasets": 1000,
+  "optimal_return": 4.470700000000001,
+  "imitation_return": 3.439,
+  "outer_iters": 20,
+  "inner_steps": 100,
+  "lr": 0.5,
+  "rows": [
+    {
+      "alpha": 0.0,
+      "overestimate": 3.5211511076544517,
+      "true_return": 3.3818535,
+      "true_return_sd": 1.087409451772217,
+      "true_return_se": 0.034386906167952265,
+      "pct_rare_bad": 8.649999999999999,
+      "pct_rare_good": 51.949999999999996,
+      "softmax_usual_at_mean_q": 0.4381113092672839
+    },
+    {
+      "alpha": 0.05,
+      "overestimate": 1.9410014997304093,
+      "true_return": 3.4822726000000004,
+      "true_return_sd": 0.9061039395447404,
+      "true_return_se": 0.028653522458128924,
+      "pct_rare_bad": 5.800000000000001,
+      "pct_rare_good": 43.0,
+      "softmax_usual_at_mean_q": 0.560756955103171
+    },
+    {
+      "alpha": 0.1,
+      "overestimate": 1.1275429887407826,
+      "true_return": 3.5222872,
+      "true_return_sd": 0.7585129942978425,
+      "true_return_se": 0.023986286968154927,
+      "pct_rare_bad": 3.95,
+      "pct_rare_good": 34.65,
+      "softmax_usual_at_mean_q": 0.6330310280822302
+    },
+    {
+      "alpha": 0.2,
+      "overestimate": 0.4781291160687832,
+      "true_return": 3.5398046000000005,
+      "true_return_sd": 0.45636926018354973,
+      "true_return_se": 0.0144316631626601,
+      "pct_rare_bad": 1.275,
+      "pct_rare_good": 18.4,
+      "softmax_usual_at_mean_q": 0.7129046420180275
+    },
+    {
+      "alpha": 0.5,
+      "overestimate": 0.33306997250187736,
+      "true_return": 3.4609246000000002,
+      "true_return_sd": 0.07569066925488409,
+      "true_return_se": 0.0023935491246791355,
+      "pct_rare_bad": 0.0,
+      "pct_rare_good": 2.1,
+      "softmax_usual_at_mean_q": 0.8031552672435446
+    },
+    {
+      "alpha": 1.0,
+      "overestimate": 0.4203287081763607,
+      "true_return": 3.4392430000000003,
+      "true_return_sd": 0.007684334714209174,
+      "true_return_se": 0.00024300000000000038,
+      "pct_rare_bad": 0.0,
+      "pct_rare_good": 0.025,
+      "softmax_usual_at_mean_q": 0.8510690392377653
+    }
+  ]
 }

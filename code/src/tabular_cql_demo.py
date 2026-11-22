@@ -1,12 +1,23 @@
-"""Small tabular demo of the course-extension idea (deck Part 3, slide 8):
-naive offline Q-iteration trusts unseen actions; the CQL(H) penalty pushes them down.
+"""Tabular CQL(H) demonstration: produces Table 5 of the reading material (§3, "A tabular demonstration").
 
-Setup: a chain MDP with N states and 2 actions (0 = left, 1 = right).
-Going right from the last state gives reward 1; everything else gives 0.
-The logged dataset comes from a behaviour policy that almost never tries
-action 1 in a few "gap" states, so those (s, a) pairs have little or no data.
+MDP: a chain of four states s0..s3. Every action moves one step right; the episode
+terminates after the action in s3, so each episode has exactly four decisions.
+Three actions per state, gamma = 0.9:
+    usual     reward ~ N(1.0, 0.5^2)
+    rare-bad  reward ~ N(-1.0, 3^2)
+    rare-good reward ~ N(1.3, 3^2)
+Behaviour policy: 0.90 / 0.05 / 0.05 in every state. Each dataset has 60 transitions
+per state (240 in all), which has the same distribution as 60 logged episodes.
 
-Run:  python src/tabular_cql_demo.py [--alpha 1.0] [--seed 0]
+For each alpha, tabular Q-iteration with the optimality backup is fitted on 1,000
+independent datasets. For alpha > 0 every iteration minimises, per state,
+    1/2 * E_{a~beta_hat}[(Q(s,a) - y(s,a))^2] + alpha * (logsumexp_a Q(s,a) - E_{a~beta_hat} Q(s,a))
+by gradient descent (the CQL(H) penalty). alpha = 0 is naive offline Q-learning.
+The greedy policy of each fit is then scored against exact Q-values computed by
+backward recursion, so there are no rollouts and no simulation noise.
+
+Learning rates and iteration counts are our own choices for this small problem.
+Needs only NumPy.  Run from code/:   python src/tabular_cql_demo.py   (seed 0 -> Table 5)
 """
 import argparse
 import json
@@ -15,96 +26,133 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-N_STATES, N_ACTIONS, GAMMA = 6, 2, 0.9
+
+N_STATES, N_ACTIONS, GAMMA = 4, 3, 0.9
+ACTIONS = ["usual", "rare-bad", "rare-good"]
+REWARD_MEAN = np.array([1.0, -1.0, 1.3])
+REWARD_SD = np.array([0.5, 3.0, 3.0])
+BEHAVIOUR = np.array([0.90, 0.05, 0.05])
+N_PER_STATE = 60
+ALPHAS = [0.0, 0.05, 0.1, 0.2, 0.5, 1.0]
+
+# Q-iteration settings (our own choices)
+OUTER_ITERS, INNER_STEPS, LR = 20, 100, 0.5
 
 
-def step(s, a):
-    if a == 1:
-        if s == N_STATES - 1:
-            return 0, 1.0
-        return s + 1, 0.0
-    return max(s - 1, 0), 0.0
-
-
-def true_q(policy):
-    """Exact Q of a deterministic policy by iterating the Bellman operator."""
-    q = np.zeros((N_STATES, N_ACTIONS))
-    for _ in range(2000):
-        new = np.zeros_like(q)
-        for s in range(N_STATES):
-            for a in range(N_ACTIONS):
-                s2, r = step(s, a)
-                new[s, a] = r + GAMMA * q[s2, policy[s2]]
-        q = new
+def exact_q(policy):
+    """Exact Q of deterministic policies by backward recursion. policy: (n, S) ints -> (n, S, A)."""
+    n = policy.shape[0]
+    q = np.zeros((n, N_STATES, N_ACTIONS))
+    v_next = np.zeros(n)
+    for s in reversed(range(N_STATES)):
+        q[:, s] = REWARD_MEAN + GAMMA * v_next[:, None]
+        v_next = q[np.arange(n), s, policy[:, s]]
     return q
 
 
-def collect(rng, n_transitions, gap_states):
-    data = []
-    s = 0
-    for _ in range(n_transitions):
-        p_right = 0.0 if s in gap_states else 0.7
-        a = int(rng.random() < p_right)
-        s2, r = step(s, a)
-        data.append((s, a, r, s2))
-        s = s2 if rng.random() > 0.1 else int(rng.integers(N_STATES))
-    return data
+def sample_datasets(rng, n_datasets):
+    """Per dataset and state: draw 60 behaviour actions, then their rewards. Returns counts and mean rewards."""
+    counts = np.zeros((n_datasets, N_STATES, N_ACTIONS))
+    reward_sum = np.zeros((n_datasets, N_STATES, N_ACTIONS))
+    for d in range(n_datasets):
+        for s in range(N_STATES):
+            a = rng.choice(N_ACTIONS, size=N_PER_STATE, p=BEHAVIOUR)
+            r = rng.normal(REWARD_MEAN[a], REWARD_SD[a])
+            np.add.at(counts[d, s], a, 1)
+            np.add.at(reward_sum[d, s], a, r)
+    mean_reward = np.divide(reward_sum, counts, out=np.zeros_like(reward_sum), where=counts > 0)
+    return counts, mean_reward
 
 
-def fit_q(data, alpha, iters=300, inner=50, lr=0.5, q_init=10.0):
-    """Fitted Q-iteration on the dataset. alpha = 0 is plain offline Q-learning."""
-    q = np.full((N_STATES, N_ACTIONS), q_init)
-    counts = np.zeros((N_STATES, N_ACTIONS))
-    for s, a, _, _ in data:
-        counts[s, a] += 1
-    state_n = counts.sum(1, keepdims=True)
-    beta = np.divide(counts, state_n, out=np.zeros_like(counts), where=state_n > 0)
-    seen_state = state_n > 0
+def fit_q(counts, mean_reward, alpha):
+    """Tabular Q-iteration (optimality backup) with the CQL(H) penalty, vectorised over datasets."""
+    beta_hat = counts / counts.sum(-1, keepdims=True)
+    seen = counts > 0
+    q = np.zeros_like(mean_reward)
+    for _ in range(OUTER_ITERS):
+        v_next = np.concatenate([q.max(-1)[:, 1:], np.zeros((q.shape[0], 1))], axis=1)
+        target = mean_reward + GAMMA * v_next[..., None]
+        if alpha == 0:
+            q = np.where(seen, target, q)  # exact minimiser; unseen actions keep their initial value 0
+            continue
+        for _ in range(INNER_STEPS):
+            soft = np.exp(q - q.max(-1, keepdims=True))
+            soft /= soft.sum(-1, keepdims=True)
+            q -= LR * (beta_hat * (q - target) + alpha * (soft - beta_hat))
+    return q
 
-    for _ in range(iters):
-        target = np.zeros_like(q)
-        for s, a, r, s2 in data:
-            target[s, a] += r + GAMMA * q[s2].max()
-        target = np.divide(target, counts, out=q.copy(), where=counts > 0)
-        # Per state: minimise  E_{a~beta}[(Q - target)^2]/2 + alpha*(logsumexp Q - E_{a~beta} Q)
-        for _ in range(inner):
-            grad_bell = beta * (q - target)
-            soft = np.exp(q - q.max(1, keepdims=True))
-            soft /= soft.sum(1, keepdims=True)
-            grad_cql = alpha * (soft - beta)
-            q -= lr * (grad_bell + grad_cql) * seen_state
-    return q, counts
+
+def evaluate(q):
+    n = q.shape[0]
+    policy = q.argmax(-1)
+    qt = exact_q(policy)
+    a0 = policy[:, 0]
+    true_return = qt[np.arange(n), 0, a0]
+    overestimate = q[np.arange(n), 0, a0] - true_return
+    return {
+        "overestimate": float(overestimate.mean()),
+        "true_return": float(true_return.mean()),
+        "true_return_sd": float(true_return.std(ddof=1)),
+        "true_return_se": float(true_return.std(ddof=1) / np.sqrt(n)),
+        "pct_rare_bad": float(100 * (policy == 1).mean()),
+        "pct_rare_good": float(100 * (policy == 2).mean()),
+        "softmax_usual_at_mean_q": float(_softmax(q.mean(0))[:, 0].mean()),
+    }
+
+
+def _softmax(x):
+    e = np.exp(x - x.max(-1, keepdims=True))
+    return e / e.sum(-1, keepdims=True)
+
+
+def latex_table(rows, seed, n):
+    best = max(rows, key=lambda r: r["true_return"])
+    lines = []
+    for r in rows:
+        name = "0 (naive)" if r["alpha"] == 0 else str(r["alpha"])
+        ret = f"{r['true_return']:.2f}"
+        ret = f"\\mathbf{{{ret}}}" if r is best else ret
+        se = "{<}0.001" if r["true_return_se"] < 0.0005 else f"{r['true_return_se']:.3f}"
+        lines.append(f"{name:<9} & ${r['overestimate']:+.2f}$ & ${ret}\\pm{se}$ & "
+                     f"{r['pct_rare_bad']:.1f}\\% & {r['pct_rare_good']:.1f}\\% \\\\")
+    return "\n".join(
+        [f"% Generated by code/src/tabular_cql_demo.py (seed {seed}, {n} datasets). Do not edit by hand.",
+         "\\begin{tabularx}{\\linewidth}{@{}r*{4}{>{\\centering\\arraybackslash}X}@{}}",
+         "\\toprule",
+         "$\\alpha$ & Overestimate of chosen $Q(s_0,\\cdot)$ & True return ($\\pm$ s.e.) "
+         "& States choosing rare-bad & States choosing rare-good \\\\",
+         "\\midrule", *lines, "\\bottomrule", "\\end{tabularx}", ""])
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--alpha", type=float, default=1.0)
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--n", type=int, default=2000)
+    ap.add_argument("--datasets", type=int, default=1000)
     args = ap.parse_args()
 
     rng = np.random.default_rng(args.seed)
-    data = collect(rng, args.n, gap_states={2})
-    results = {}
-    for name, alpha in [("naive", 0.0), ("cql", args.alpha)]:
-        q, counts = fit_q(data, alpha)
-        policy = q.argmax(1)
-        qt = true_q(policy)
-        results[name] = {
-            "policy": policy.tolist(),
-            "Q_learned_s0": float(q[0, policy[0]]),
-            "Q_true_s0": float(qt[0, policy[0]]),
-            "overestimation_s0": float(q[0, policy[0]] - qt[0, policy[0]]),
-        }
-        print(f"\n== {name} (alpha={alpha}) ==")
-        print("counts per (s,a):\n", counts.astype(int))
-        print("learned Q:\n", np.round(q, 3))
-        print("greedy policy:", policy, " learned V(s0) =", round(q[0, policy[0]], 3),
-              " true V(s0) =", round(qt[0, policy[0]], 3))
+    counts, mean_reward = sample_datasets(rng, args.datasets)
 
-    out = ROOT / "results" / f"tabular_cql_seed{args.seed}.json"
-    out.write_text(json.dumps(results, indent=2))
-    print(f"\nSaved {out}")
+    imitation = float(exact_q(np.zeros((1, N_STATES), int))[0, 0, 0])
+    optimal = float(exact_q(np.full((1, N_STATES), 2))[0, 0, 2])
+    print(f"Reference returns: optimal (always rare-good) {optimal:.2f}, imitation (always usual) {imitation:.2f}")
+    print(f"Seed {args.seed}, {args.datasets} datasets\n")
+    print(f"{'alpha':>6} {'overest.':>9} {'return':>8} {'s.e.':>7} {'sd':>6} {'rare-bad':>9} {'rare-good':>10}")
+
+    rows = []
+    for alpha in ALPHAS:
+        r = {"alpha": alpha, **evaluate(fit_q(counts, mean_reward, alpha))}
+        rows.append(r)
+        print(f"{alpha:>6g} {r['overestimate']:>+9.2f} {r['true_return']:>8.2f} {r['true_return_se']:>7.3f} "
+              f"{r['true_return_sd']:>6.2f} {r['pct_rare_bad']:>8.1f}% {r['pct_rare_good']:>9.1f}%")
+
+    out_dir = ROOT / "results"
+    out_dir.mkdir(exist_ok=True)
+    meta = {"seed": args.seed, "datasets": args.datasets, "optimal_return": optimal,
+            "imitation_return": imitation, "outer_iters": OUTER_ITERS, "inner_steps": INNER_STEPS, "lr": LR}
+    (out_dir / f"tabular_cql_seed{args.seed}.json").write_text(json.dumps({**meta, "rows": rows}, indent=2) + "\n")
+    (out_dir / f"table5_seed{args.seed}.tex").write_text(latex_table(rows, args.seed, args.datasets))
+    print(f"\nSaved results/tabular_cql_seed{args.seed}.json and results/table5_seed{args.seed}.tex")
 
 
 if __name__ == "__main__":
