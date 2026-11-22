@@ -22,7 +22,7 @@ Offline Reinforcement Learning in Practice, with Conservative Q-Learning as a ca
 
 # WRITE-UP
 
-The final reading material is written in Overleaf. Read-only link to the project, including its history panel:
+The final reading material was written in Overleaf. Read-only link to the project:
 
 https://www.overleaf.com/project/6acf42621c72f554fb0f55a6/share#40e27f6d1b54ffe7ee6fdfe22e2c87ad5d36b1c6a6c0e8db
 
